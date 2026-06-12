@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Tab Lifecycle Timer - Панель управления</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background-color: #f8f9fa;
+      margin: 0;
+      padding: 30px;
+      color: #3c4043;
+    }
+    .container { max-width: 900px; margin: 0 auto; }
+    h1 { font-size: 24px; color: #1a73e8; margin-bottom: 25px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+    .card {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    h2 { font-size: 16px; margin-top: 0; margin-bottom: 15px; color: #202124; border-bottom: 1px solid #f1f3f4; padding-bottom: 8px;}
+    .flex-input { display: flex; gap: 10px; margin-bottom: 15px; }
+    input[type="number"], input[type="text"] {
+      padding: 8px;
+      border: 1px solid #dadce0;
+      border-radius: 4px;
+      font-size: 14px;
+      flex-grow: 1;
+    }
+    input[type="number"] { max-width: 100px; }
+    
+    /* Стили для ползунка (Toggle Switch) */
+    .toggle-wrapper {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 20px;
+      padding-top: 15px;
+      border-top: 1px dashed #e8eaed;
+    }
+    .toggle-label { font-size: 13px; color: #3c4043; font-weight: 500; }
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 40px;
+      height: 22px;
+    }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #dadce0; transition: .3s; border-radius: 22px;
+    }
+    .slider:before {
+      position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px;
+      background-color: white; transition: .3s; border-radius: 50%;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    input:checked + .slider { background-color: #1a73e8; }
+    input:checked + .slider:before { transform: translateX(18px); }
+
+    .search-input {
+      width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #dadce0; border-radius: 4px; font-size: 13px;
+      background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="%2380868b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>');
+      background-repeat: no-repeat; background-position: calc(100% - 10px) center; padding-right: 35px;
+    }
+    button { padding: 8px 16px; background-color: #1a73e8; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; font-size: 13px; white-space: nowrap; }
+    button:hover { background-color: #1557b0; }
+    button.secondary { background-color: #f1f3f4; color: #1a73e8; }
+    button.secondary:hover { background-color: #e8eaed; }
+    button.danger { background-color: #ea4335; color: white; }
+    button.danger:hover { background-color: #c5221f; }
+    
+    /* Баннер запроса разрешений для Firefox */
+    .permissions-banner {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background-color: #fef7e0;
+      border: 1px solid #f9d849;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      font-size: 13px;
+      color: #5f6368;
+      gap: 12px;
+    }
+    .permissions-banner.visible { display: flex; }
+    .permissions-banner button {
+      flex-shrink: 0;
+      white-space: nowrap;
+      padding: 6px 14px;
+      font-size: 12px;
+    }
+    
+    ul { list-style: none; padding: 0; margin: 0; max-height: 200px; overflow-y: auto; }
+    li { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #f1f3f4; font-size: 14px; }
+    li:last-child { border-bottom: none; }
+    .delete-btn { color: #d93025; cursor: pointer; background: none; border: none; padding: 0 5px; font-size: 16px; }
+    .restore-btn { font-size: 12px; padding: 4px 8px; flex-shrink: 0; }
+    .tab-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 75%; }
+    .stat-val { font-size: 28px; font-weight: bold; color: #1a73e8; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Панель управления расширением</h1>
+
+    <div id="permissionsBanner" class="permissions-banner">
+      <span>⚠️ Для работы анализа медиа в Firefox необходимо предоставить доступ к сайтам.</span>
+      <button id="requestPermissionsBtn">Разрешить доступ</button>
+    </div>
+    
+    <div class="grid">
+      <div class="card">
+        <h2>Глобальные настройки</h2>
+        <p style="font-size: 13px; color: #5f6368;">Вкладки закрываются, если провели в фоне указанное количество минут.</p>
+        <div class="flex-input">
+          <input type="number" id="timeoutInput" min="1" max="1440">
+          <button id="saveTimeoutBtn">Сохранить</button>
+        </div>
+        <div class="toggle-wrapper">
+          <span class="toggle-label">Не закрывать вкладку Панели Управления</span>
+          <label class="switch">
+            <input type="checkbox" id="protectDashboardCheckbox">
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Сбереженная память</h2>
+        <p style="font-size: 13px; color: #5f6368;">Примерный объем оперативной памяти, освобожденный утилитой:</p>
+        <div id="ramDisplay" class="stat-val">0 МБ</div>
+      </div>
+
+      <div class="card">
+        <h2>Белый список доменов (Всегда игнорировать сайт)</h2>
+        <div class="flex-input">
+          <input type="text" id="whitelistInput" placeholder="например: github.com">
+          <button id="addWhitelistBtn">Добавить</button>
+        </div>
+        <ul id="whitelistContainer"></ul>
+      </div>
+
+      <div class="card">
+        <h2>Недавно закрытые вкладки (Корзина)</h2>
+        <div class="flex-header">
+          <input type="text" id="trashSearchInput" class="search-input" placeholder="Поиск по названию или URL...">
+          <button id="restoreAllBtn" class="secondary">Восстановить все</button>
+        </div>
+        <ul id="trashContainer"></ul>
+      </div>
+
+      <div class="card card-full">
+        <h2>Вкладки с активным иммунитетом (Защищены через меню)</h2>
+        <div class="flex-header">
+          <input type="text" id="protectedSearchInput" class="search-input" placeholder="Поиск по защищенным вкладкам...">
+          <button id="unprotectAllBtn" class="danger">Перестать игнорировать все</button>
+        </div>
+        <ul id="protectedTabsContainer"></ul>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>

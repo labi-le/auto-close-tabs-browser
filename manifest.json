@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Tab Lifecycle Timer",
+  "version": "2.2",
+  "description": "Автоматическое закрытие неактивных вкладок с панелью управления, белым списком и корзиной.",
+  "permissions": [
+    "tabs",
+    "alarms",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "options_ui": {
+    "page": "dashboard.html",
+    "open_in_tab": true
+  }
+}

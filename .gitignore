@@ -1,0 +1,10 @@
+# Дистрибутивы сборки
+dist/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db

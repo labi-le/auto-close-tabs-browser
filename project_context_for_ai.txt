@@ -1,0 +1,950 @@
+============================================================
+PROJECT DIRECTORY TREE
+============================================================
+
+auto-close-tabs-browser/
+├── background.js
+├── dashboard.html
+├── dashboard.js
+├── manifest.json
+├── popup.html
+├── popup.js
+└── scraper.py
+
+
+============================================================
+PROJECT FILES CONTENT
+============================================================
+
+--- BEGIN FILE: background.js ---
+const DEFAULT_TIMEOUT = 10;
+const RAM_PER_TAB_MB = 150;
+
+// Очередь для предотвращения Race Condition при последовательной записи в Storage
+let storageQueue = Promise.resolve();
+
+// Асинхронное получение таймаута (оптимизировано: поддержка передачи кэшированного значения)
+async function getTimeoutMinutes() {
+  const data = await chrome.storage.local.get("timeoutMinutes");
+  return data.timeoutMinutes || DEFAULT_TIMEOUT;
+}
+
+// Продление таймера для конкретной вкладки (с поддержкой передачи готового таймаута)
+async function resetTimer(tabId, customTimeout = null) {
+  if (!tabId) return;
+  try {
+    await chrome.alarms.clear(`tab_${tabId}`);
+    const timeoutMinutes = customTimeout || await getTimeoutMinutes();
+    chrome.alarms.create(`tab_${tabId}`, { delayInMinutes: timeoutMinutes });
+  } catch (error) {
+    console.error(`[Error] Не удалось обновить таймер для таба ${tabId}:`, error);
+  }
+}
+
+// Безопасная проверка домена (защита от Subdomain Spoofing)
+async function isWhiteListed(urlStr) {
+  try {
+    if (!urlStr || !urlStr.startsWith('http')) return false;
+    const url = new URL(urlStr);
+    const data = await chrome.storage.local.get("whiteList");
+    const whiteList = data.whiteList || [];
+    
+    return whiteList.some(domain => {
+      // Строгое равенство хостов или проверка валидного родительского поддомена
+      return url.hostname === domain || url.hostname.endsWith('.' + domain);
+    });
+  } catch (e) {
+    return false;
+  }
+}
+
+// Атомарное логирование за счет выстраивания Promises в цепочку (Очередь)
+function logClosedTab(title, url) {
+  storageQueue = storageQueue.then(async () => {
+    try {
+      const data = await chrome.storage.local.get(["trashBin", "savedRamMb"]);
+      let trashBin = data.trashBin || [];
+      let savedRamMb = data.savedRamMb || 0;
+
+      trashBin.unshift({ title: title || url, url, closedAt: Date.now() });
+      if (trashBin.length > 50) trashBin.pop();
+
+      savedRamMb += RAM_PER_TAB_MB;
+      await chrome.storage.local.set({ trashBin, savedRamMb });
+    } catch (error) {
+      console.error("[Error] Ошибка сохранения логов закрытия:", error);
+    }
+  }).catch(() => {});
+}
+
+// Проверка активности медиа (Исключаем вечно стоящие на паузе вкладки)
+async function isMediaPlaying(tabId) {
+  try {
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: () => {
+        const mediaElements = Array.from(document.querySelectorAll('video, audio'));
+        // Медиа считается активным, только если оно реально воспроизводится в данный момент
+        return mediaElements.some(media => media.currentTime > 0 && !media.paused && !media.ended);
+      }
+    });
+    return result?.result || false;
+  } catch (e) {
+    return false; // Защита от системных страниц (chrome://)
+  }
+}
+
+// Жизненный цикл
+chrome.tabs.onCreated.addListener(async (tab) => { await resetTimer(tab.id); });
+chrome.tabs.onActivated.addListener(async ({ tabId }) => { await resetTimer(tabId); });
+
+chrome.windows.onFocusChanged.addListener(async (windowId) => {
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+  try {
+    const [activeTab] = await chrome.tabs.query({ active: true, windowId: windowId });
+    if (activeTab) await resetTimer(activeTab.id);
+  } catch (e) {}
+});
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  await chrome.alarms.clear(`tab_${tabId}`);
+  storageQueue = storageQueue.then(async () => {
+    const data = await chrome.storage.local.get("protectedTabIds");
+    let protectedTabIds = data.protectedTabIds || [];
+    if (protectedTabIds.includes(tabId)) {
+      protectedTabIds = protectedTabIds.filter(id => id !== tabId);
+      await chrome.storage.local.set({ protectedTabIds });
+    }
+  }).catch(() => {});
+});
+
+// Диспетчер принятия решений
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (!alarm.name.startsWith("tab_")) return;
+  const tabId = parseInt(alarm.name.replace("tab_", ""), 10);
+
+  try {
+    const settings = await chrome.storage.local.get("timerEnabled");
+    if (settings.timerEnabled === false) {
+      await resetTimer(tabId);
+      return;
+    }
+
+    const tab = await chrome.tabs.get(tabId);
+    const lastFocusedWindow = await chrome.windows.getLastFocused();
+    
+    // 1. Защита иммунитета
+    const storageData = await chrome.storage.local.get("protectedTabIds");
+    const protectedTabIds = storageData.protectedTabIds || [];
+    if (protectedTabIds.includes(tabId)) {
+      await resetTimer(tabId);
+      return;
+    }
+
+    // 2. Защита панели управления
+    const extensionUrlBase = chrome.runtime.getURL('');
+    if (tab.url && tab.url.startsWith(extensionUrlBase)) {
+      const storageDataPage = await chrome.storage.local.get("protectDashboard");
+      if (storageDataPage.protectDashboard !== false) {
+        await resetTimer(tabId);
+        return;
+      }
+    }
+
+    // 3. Защита фокуса активности
+    if (tab.active && tab.windowId === lastFocusedWindow.id) {
+      await resetTimer(tabId);
+      return;
+    }
+
+    // ИСПРАВЛЕНИЕ УТЕЧКИ: Перевыпуск аларма для защищенных встроенных флагов
+    if (tab.pinned || tab.audible) {
+      await resetTimer(tabId);
+      return;
+    } 
+    
+    // ИСПРАВЛЕНИЕ УТЕЧКИ: Перевыпуск аларма для белого списка
+    const whitelisted = await isWhiteListed(tab.url);
+    if (whitelisted) {
+      await resetTimer(tabId);
+      return;
+    }
+
+    // 4. Глубокий анализ медиа-потоков
+    const hasActiveMedia = await isMediaPlaying(tabId);
+    if (hasActiveMedia) {
+      await resetTimer(tabId);
+      return;
+    }
+
+    // Условия соблюдены — закрываем вкладку безопасным логированием
+    logClosedTab(tab.title, tab.url);
+    await chrome.tabs.remove(tabId);
+    
+  } catch (error) {
+    // Вкладка не существует или закрыта вручную — подчищаем аларм
+    await chrome.alarms.clear(alarm.name);
+  }
+});
+
+// Реактивный Force Sync (Оптимизированный I/O: один запрос к Storage вместо N)
+chrome.storage.onChanged.addListener(async (changes, areaName) => {
+  if (areaName === "local" && changes.timeoutMinutes) {
+    try {
+      const newTimeout = changes.timeoutMinutes.newValue || DEFAULT_TIMEOUT;
+      const tabs = await chrome.tabs.query({});
+      // Избегаем деградации производительности: передаем закэшированное значение таймаута
+      for (const tab of tabs) { 
+        if (tab.id) await resetTimer(tab.id, newTimeout); 
+      }
+    } catch (e) {}
+  }
+});
+--- END FILE: background.js ---
+
+--- BEGIN FILE: dashboard.html ---
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Tab Lifecycle Timer - Панель управления</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background-color: #f8f9fa;
+      margin: 0;
+      padding: 30px;
+      color: #3c4043;
+    }
+    .container { max-width: 900px; margin: 0 auto; }
+    h1 { font-size: 24px; color: #1a73e8; margin-bottom: 25px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+    .card {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    h2 { font-size: 16px; margin-top: 0; margin-bottom: 15px; color: #202124; border-bottom: 1px solid #f1f3f4; padding-bottom: 8px;}
+    .flex-input { display: flex; gap: 10px; margin-bottom: 15px; }
+    input[type="number"], input[type="text"] {
+      padding: 8px;
+      border: 1px solid #dadce0;
+      border-radius: 4px;
+      font-size: 14px;
+      flex-grow: 1;
+    }
+    input[type="number"] { max-width: 100px; }
+    
+    /* Стили для ползунка (Toggle Switch) */
+    .toggle-wrapper {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 20px;
+      padding-top: 15px;
+      border-top: 1px dashed #e8eaed;
+    }
+    .toggle-label { font-size: 13px; color: #3c4043; font-weight: 500; }
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 40px;
+      height: 22px;
+    }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #dadce0; transition: .3s; border-radius: 22px;
+    }
+    .slider:before {
+      position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px;
+      background-color: white; transition: .3s; border-radius: 50%;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    input:checked + .slider { background-color: #1a73e8; }
+    input:checked + .slider:before { transform: translateX(18px); }
+
+    .search-input {
+      width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #dadce0; border-radius: 4px; font-size: 13px;
+      background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="%2380868b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>');
+      background-repeat: no-repeat; background-position: calc(100% - 10px) center; padding-right: 35px;
+    }
+    button { padding: 8px 16px; background-color: #1a73e8; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; font-size: 13px; white-space: nowrap; }
+    button:hover { background-color: #1557b0; }
+    button.secondary { background-color: #f1f3f4; color: #1a73e8; }
+    button.secondary:hover { background-color: #e8eaed; }
+    button.danger { background-color: #ea4335; color: white; }
+    button.danger:hover { background-color: #c5221f; }
+    
+    ul { list-style: none; padding: 0; margin: 0; max-height: 200px; overflow-y: auto; }
+    li { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #f1f3f4; font-size: 14px; }
+    li:last-child { border-bottom: none; }
+    .delete-btn { color: #d93025; cursor: pointer; background: none; border: none; padding: 0 5px; font-size: 16px; }
+    .restore-btn { font-size: 12px; padding: 4px 8px; flex-shrink: 0; }
+    .tab-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 75%; }
+    .stat-val { font-size: 28px; font-weight: bold; color: #1a73e8; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Панель управления расширением</h1>
+    
+    <div class="grid">
+      <div class="card">
+        <h2>Глобальные настройки</h2>
+        <p style="font-size: 13px; color: #5f6368;">Вкладки закрываются, если провели в фоне указанное количество минут.</p>
+        <div class="flex-input">
+          <input type="number" id="timeoutInput" min="1" max="1440">
+          <button id="saveTimeoutBtn">Сохранить</button>
+        </div>
+        <div class="toggle-wrapper">
+          <span class="toggle-label">Не закрывать вкладку Панели Управления</span>
+          <label class="switch">
+            <input type="checkbox" id="protectDashboardCheckbox">
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Сбереженная память</h2>
+        <p style="font-size: 13px; color: #5f6368;">Примерный объем оперативной памяти, освобожденный утилитой:</p>
+        <div id="ramDisplay" class="stat-val">0 МБ</div>
+      </div>
+
+      <div class="card">
+        <h2>Белый список доменов (Всегда игнорировать сайт)</h2>
+        <div class="flex-input">
+          <input type="text" id="whitelistInput" placeholder="например: github.com">
+          <button id="addWhitelistBtn">Добавить</button>
+        </div>
+        <ul id="whitelistContainer"></ul>
+      </div>
+
+      <div class="card">
+        <h2>Недавно закрытые вкладки (Корзина)</h2>
+        <div class="flex-header">
+          <input type="text" id="trashSearchInput" class="search-input" placeholder="Поиск по названию или URL...">
+          <button id="restoreAllBtn" class="secondary">Восстановить все</button>
+        </div>
+        <ul id="trashContainer"></ul>
+      </div>
+
+      <div class="card card-full">
+        <h2>Вкладки с активным иммунитетом (Защищены через меню)</h2>
+        <div class="flex-header">
+          <input type="text" id="protectedSearchInput" class="search-input" placeholder="Поиск по защищенным вкладкам...">
+          <button id="unprotectAllBtn" class="danger">Перестать игнорировать все</button>
+        </div>
+        <ul id="protectedTabsContainer"></ul>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>
+--- END FILE: dashboard.html ---
+
+--- BEGIN FILE: dashboard.js ---
+document.addEventListener('DOMContentLoaded', async () => {
+  // DOM Элементы
+  const timeoutInput = document.getElementById('timeoutInput');
+  const saveTimeoutBtn = document.getElementById('saveTimeoutBtn');
+  const ramDisplay = document.getElementById('ramDisplay');
+  const whitelistInput = document.getElementById('whitelistInput');
+  const addWhitelistBtn = document.getElementById('addWhitelistBtn');
+  const whitelistContainer = document.getElementById('whitelistContainer');
+  const trashContainer = document.getElementById('trashContainer');
+  const trashSearchInput = document.getElementById('trashSearchInput');
+  const protectDashboardCheckbox = document.getElementById('protectDashboardCheckbox');
+  
+  // Элементы управления иммунитетом
+  const protectedSearchInput = document.getElementById('protectedSearchInput');
+  const unprotectAllBtn = document.getElementById('unprotectAllBtn');
+  const protectedTabsContainer = document.getElementById('protectedTabsContainer');
+  const restoreAllBtn = document.getElementById('restoreAllBtn');
+
+  // Кэш состояния
+  let globalTrashBin = [];
+  let globalProtectedTabs = [];
+
+  // Защита от XSS: Безопасное создание DOM-узлов вместо innerHTML
+  function createDOMRow(mainText, subText, actionBtnConfig) {
+    const li = document.createElement('li');
+    
+    const span = document.createElement('span');
+    span.className = 'tab-title';
+    
+    if (subText) {
+      const boldPrefix = document.createElement('b');
+      boldPrefix.textContent = subText + ' ';
+      span.appendChild(boldPrefix);
+    }
+    
+    const textNode = document.createTextNode(mainText);
+    span.appendChild(textNode);
+    span.title = mainText;
+    
+    li.appendChild(span);
+
+    if (actionBtnConfig) {
+      const btn = document.createElement('button');
+      btn.className = actionBtnConfig.className;
+      btn.textContent = actionBtnConfig.text;
+      btn.setAttribute(actionBtnConfig.dataAttr.name, actionBtnConfig.dataAttr.val);
+      li.appendChild(btn);
+    }
+    
+    return li;
+  }
+
+  // Оптимизированное батчевое восстановление вкладок для предотвращения Spawning DOS
+  async function batchRestoreTabs(urls, batchSize = 5, delayMs = 200) {
+    for (let i = 0; i < urls.length; i += batchSize) {
+      const batch = urls.slice(i, i + batchSize);
+      await Promise.all(batch.map(url => {
+        if (url) return chrome.tabs.create({ url, active: false });
+      }));
+      if (i + batchSize < urls.length) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+
+  // Реактивный слушатель удаления вкладок для синхронизации кэша UI в реальном времени
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    const initialLength = globalProtectedTabs.length;
+    globalProtectedTabs = globalProtectedTabs.filter(tab => tab.id !== tabId);
+    if (globalProtectedTabs.length !== initialLength) {
+      applyProtectedFilter();
+    }
+  });
+
+  async function init() {
+    const data = await chrome.storage.local.get(['timeoutMinutes', 'savedRamMb', 'whiteList', 'trashBin', 'protectDashboard', 'protectedTabIds']);
+    
+    timeoutInput.value = data.timeoutMinutes || 10;
+    renderRam(data.savedRamMb || 0);
+    renderWhitelist(data.whiteList || []);
+    protectDashboardCheckbox.checked = data.protectDashboard !== false;
+    
+    globalTrashBin = data.trashBin || [];
+    applyTrashFilter();
+
+    const activeTabs = await chrome.tabs.query({});
+    const protectedIds = data.protectedTabIds || [];
+    globalProtectedTabs = activeTabs.filter(tab => protectedIds.includes(tab.id));
+    applyProtectedFilter();
+  }
+
+  protectDashboardCheckbox.addEventListener('change', async () => {
+    await chrome.storage.local.set({ protectDashboard: protectDashboardCheckbox.checked });
+  });
+
+  function renderRam(mb) {
+    if (mb >= 1024) ramDisplay.textContent = `${(mb / 1024).toFixed(2)} ГБ`;
+    else ramDisplay.textContent = `${mb} МБ`;
+  }
+
+  // Защита от XSS: Безопасный рендер белого списка
+  function renderWhitelist(list) {
+    whitelistContainer.innerHTML = '';
+    list.forEach((domain, index) => {
+      const row = createDOMRow(domain, null, {
+        className: 'delete-btn',
+        text: '×',
+        dataAttr: { name: 'data-index', val: String(index) }
+      });
+      whitelistContainer.appendChild(row);
+    });
+  }
+
+  function applyTrashFilter() {
+    const query = trashSearchInput.value.toLowerCase().trim();
+    const filtered = globalTrashBin.filter(item => 
+      (item.title && item.title.toLowerCase().includes(query)) || (item.url && item.url.toLowerCase().includes(query))
+    );
+    renderTrash(filtered);
+  }
+
+  // Защита от XSS: Безопасный рендер корзины
+  function renderTrash(list) {
+    trashContainer.innerHTML = '';
+    if (list.length === 0) {
+      const emptyLi = document.createElement('li');
+      emptyLi.style.cssText = 'color: #80868b; justify-content: center;';
+      emptyLi.textContent = 'Корзина пуста';
+      trashContainer.appendChild(emptyLi);
+      return;
+    }
+    list.forEach((tab) => {
+      const row = createDOMRow(tab.title || tab.url, null, {
+        className: 'secondary restore-btn',
+        text: 'Восстановить',
+        dataAttr: { name: 'data-url', val: tab.url }
+      });
+      trashContainer.appendChild(row);
+    });
+  }
+
+  function applyProtectedFilter() {
+    const query = protectedSearchInput.value.toLowerCase().trim();
+    const filtered = globalProtectedTabs.filter(tab => 
+      (tab.title && tab.title.toLowerCase().includes(query)) || (tab.url && tab.url.toLowerCase().includes(query))
+    );
+    renderProtectedTabs(filtered);
+  }
+
+  // Защита от XSS: Безопасный рендер защищенных вкладок
+  function renderProtectedTabs(list) {
+    protectedTabsContainer.innerHTML = '';
+    if (list.length === 0) {
+      const emptyLi = document.createElement('li');
+      emptyLi.style.cssText = 'color: #80868b; justify-content: center;';
+      emptyLi.textContent = 'Защищенных вкладок не найдено';
+      protectedTabsContainer.appendChild(emptyLi);
+      return;
+    }
+    list.forEach((tab) => {
+      const row = createDOMRow(tab.title || tab.url, `[ID: ${tab.id}]`, {
+        className: 'secondary remove-protect-btn',
+        text: 'Снять иммунитет',
+        dataAttr: { name: 'data-id', val: String(tab.id) }
+      });
+      protectedTabsContainer.appendChild(row);
+    });
+  }
+
+  // Слушатели живого поиска
+  trashSearchInput.addEventListener('input', applyTrashFilter);
+  protectedSearchInput.addEventListener('input', applyProtectedFilter);
+
+  // Массовое восстановление с батчингом
+  restoreAllBtn.addEventListener('click', async () => {
+    if (globalTrashBin.length === 0) return;
+
+    if (confirm(`Восстановить все вкладки из корзины (${globalTrashBin.length} шт.)?`)) {
+      try {
+        const urlsToRestore = globalTrashBin.map(t => t.url).filter(Boolean);
+        globalTrashBin = [];
+        await chrome.storage.local.set({ trashBin: globalTrashBin });
+        applyTrashFilter();
+
+        // Запуск безопасного каскадного восстановления
+        await batchRestoreTabs(urlsToRestore);
+      } catch (error) {
+        console.error('[Error] Ошибка массового восстановления:', error);
+      }
+    }
+  });
+
+  unprotectAllBtn.addEventListener('click', async () => {
+    if (globalProtectedTabs.length === 0) return;
+    if (confirm('Вы уверены, что хотите снять защиту со ВСЕХ вкладок?')) {
+      await chrome.storage.local.set({ protectedTabIds: [] });
+      globalProtectedTabs = [];
+      applyProtectedFilter();
+    }
+  });
+
+  protectedTabsContainer.addEventListener('click', async (e) => {
+    if (e.target.classList.contains('remove-protect-btn')) {
+      const tabId = parseInt(e.target.getAttribute('data-id'), 10);
+      
+      const data = await chrome.storage.local.get('protectedTabIds');
+      let protectedTabIds = data.protectedTabIds || [];
+      protectedTabIds = protectedTabIds.filter(id => id !== tabId);
+      
+      await chrome.storage.local.set({ protectedTabIds });
+      
+      globalProtectedTabs = globalProtectedTabs.filter(tab => tab.id !== tabId);
+      applyProtectedFilter();
+    }
+  });
+
+  saveTimeoutBtn.addEventListener('click', async () => {
+    const min = parseInt(timeoutInput.value, 10);
+    if (min >= 1) {
+      await chrome.storage.local.set({ timeoutMinutes: min });
+      alert('Интервал успешно обновлен для всех вкладок!');
+    }
+  });
+
+  addWhitelistBtn.addEventListener('click', async () => {
+    let domain = whitelistInput.value.trim().toLowerCase();
+    if (!domain) return;
+    domain = domain.replace(/^(https?:\/\/)?(www\.)?/, '').split('/')[0];
+    const data = await chrome.storage.local.get('whiteList');
+    let whiteList = data.whiteList || [];
+    if (!whiteList.includes(domain)) {
+      whiteList.push(domain);
+      await chrome.storage.local.set({ whiteList });
+      renderWhitelist(whiteList);
+      whitelistInput.value = '';
+    }
+  });
+
+  whitelistContainer.addEventListener('click', async (e) => {
+    if (e.target.classList.contains('delete-btn')) {
+      const index = parseInt(e.target.getAttribute('data-index'), 10);
+      const data = await chrome.storage.local.get('whiteList');
+      let whiteList = data.whiteList || [];
+      whiteList.splice(index, 1);
+      await chrome.storage.local.set({ whiteList });
+      renderWhitelist(whiteList);
+    }
+  });
+
+  trashContainer.addEventListener('click', async (e) => {
+    if (e.target.classList.contains('restore-btn')) {
+      const url = e.target.getAttribute('data-url');
+      if (url) {
+        await chrome.tabs.create({ url, active: false });
+        globalTrashBin = globalTrashBin.filter(item => item.url !== url);
+        await chrome.storage.local.set({ trashBin: globalTrashBin });
+        applyTrashFilter();
+      }
+    }
+  });
+
+  init();
+});
+--- END FILE: dashboard.js ---
+
+--- BEGIN FILE: manifest.json ---
+{
+  "manifest_version": 3,
+  "name": "Tab Lifecycle Timer",
+  "version": "2.1",
+  "description": "Автоматическое закрытие неактивных вкладок с панелью управления, белым списком и корзиной.",
+  "permissions": [
+    "tabs",
+    "alarms",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "options_ui": {
+    "page": "dashboard.html",
+    "open_in_tab": true
+  }
+}
+--- END FILE: manifest.json ---
+
+--- BEGIN FILE: popup.html ---
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Tab Lifecycle Timer</title>
+  <style>
+    body {
+      width: 240px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      padding: 14px;
+      margin: 0;
+      background-color: #ffffff;
+    }
+    h3 { margin: 0 0 10px 0; font-size: 15px; color: #222; }
+    
+    /* Главный выключатель таймера */
+    .master-switch-box {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px;
+      background-color: #f1f3f4;
+      border-radius: 6px;
+      font-size: 13px;
+      margin-bottom: 12px;
+      font-weight: bold;
+    }
+    .master-switch-box.paused {
+      background-color: #fce8e6;
+      color: #c5221f;
+    }
+
+    .stat-box {
+      background-color: #f1f3f4;
+      padding: 8px;
+      border-radius: 6px;
+      font-size: 12px;
+      color: #5f6368;
+      margin-bottom: 12px;
+    }
+    .stat-box strong { color: #1a73e8; }
+    
+    .tab-protect-box {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px;
+      background-color: #e8f0fe;
+      border-radius: 6px;
+      font-size: 12px;
+      color: #1967d2;
+      margin-bottom: 12px;
+      font-weight: 500;
+    }
+    
+    /* Общие стили Toggle Switches */
+    .switch { position: relative; display: inline-block; width: 34px; height: 20px; flex-shrink: 0; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #dadce0; transition: .2s; border-radius: 20px;
+    }
+    .slider:before {
+      position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px;
+      background-color: white; transition: .2s; border-radius: 50%;
+    }
+    input:checked + .slider { background-color: #1a73e8; }
+    input:checked + .slider.master-slider { background-color: #1e8e3e; }
+    input:checked + .slider:before { transform: translateX(14px); }
+
+    button {
+      width: 100%;
+      padding: 8px;
+      background-color: #1a73e8;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: 500;
+      font-size: 13px;
+    }
+    button:hover { background-color: #1557b0; }
+  </style>
+</head>
+<body>
+  <h3>Tab Lifecycle Timer</h3>
+  
+  <div id="masterBox" class="master-switch-box">
+    <span id="masterStatusText">Таймер работает</span>
+    <label class="switch">
+      <input type="checkbox" id="pauseTimerCheckbox" checked>
+      <span class="slider master-slider"></span>
+    </label>
+  </div>
+
+  <div class="stat-box">
+    Текущий таймаут: <strong id="currentTimeout">-</strong> мин.<br>
+    Сберегли памяти: <strong id="ramCounter">0</strong> МБ
+  </div>
+
+  <div class="tab-protect-box">
+    <span>Игнорировать эту вкладку</span>
+    <label class="switch">
+      <input type="checkbox" id="protectTabCheckbox">
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <button id="openDashboardBtn">Панель управления</button>
+
+  <script src="popup.js"></script>
+</body>
+</html>
+--- END FILE: popup.html ---
+
+--- BEGIN FILE: popup.js ---
+document.addEventListener('DOMContentLoaded', async () => {
+  const currentTimeout = document.getElementById('currentTimeout');
+  const ramCounter = document.getElementById('ramCounter');
+  const openDashboardBtn = document.getElementById('openDashboardBtn');
+  const protectTabCheckbox = document.getElementById('protectTabCheckbox');
+  const pauseTimerCheckbox = document.getElementById('pauseTimerCheckbox');
+  const masterBox = document.getElementById('masterBox');
+  const masterStatusText = document.getElementById('masterStatusText');
+
+  let currentTabId = null;
+
+  try {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (activeTab && activeTab.id) currentTabId = activeTab.id;
+
+    // Считываем состояние таймера (true по умолчанию)
+    const data = await chrome.storage.local.get(['timeoutMinutes', 'savedRamMb', 'protectedTabIds', 'timerEnabled']);
+    
+    currentTimeout.textContent = data.timeoutMinutes || 10;
+    ramCounter.textContent = data.savedRamMb || 0;
+
+    // Настройка главного переключателя
+    const isEnabled = data.timerEnabled !== false;
+    pauseTimerCheckbox.checked = isEnabled;
+    updateMasterUI(isEnabled);
+
+    const protectedTabIds = data.protectedTabIds || [];
+    if (currentTabId && protectedTabIds.includes(currentTabId)) {
+      protectTabCheckbox.checked = true;
+    }
+  } catch (e) { console.error(e); }
+
+  // Переключение состояния глобального таймера
+  pauseTimerCheckbox.addEventListener('change', async () => {
+    const isEnabled = pauseTimerCheckbox.checked;
+    await chrome.storage.local.set({ timerEnabled: isEnabled });
+    updateMasterUI(isEnabled);
+  });
+
+  function updateMasterUI(isEnabled) {
+    if (isEnabled) {
+      masterBox.classList.remove('paused');
+      masterStatusText.textContent = 'Таймер работает';
+    } else {
+      masterBox.classList.add('paused');
+      masterStatusText.textContent = 'Таймер НА ПАУЗЕ';
+    }
+  }
+
+  protectTabCheckbox.addEventListener('change', async () => {
+    if (!currentTabId) return;
+    try {
+      const data = await chrome.storage.local.get('protectedTabIds');
+      let protectedTabIds = data.protectedTabIds || [];
+
+      if (protectTabCheckbox.checked) {
+        if (!protectedTabIds.includes(currentTabId)) protectedTabIds.push(currentTabId);
+      } else {
+        protectedTabIds = protectedTabIds.filter(id => id !== currentTabId);
+      }
+      await chrome.storage.local.set({ protectedTabIds });
+    } catch (e) { console.error(e); }
+  });
+
+  openDashboardBtn.addEventListener('click', () => { chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') }); });
+});
+--- END FILE: popup.js ---
+
+--- BEGIN FILE: scraper.py ---
+import os
+from pathlib import Path
+
+# --- НАСТРОЙКИ ФИЛЬТРАЦИИ ---
+
+# Директории, которые нужно пропустить
+EXCLUDE_DIRS = {
+    '.git', '.idea', '.vscode', '__pycache__', 
+    'venv', 'env', 'node_modules', 'build', 'instructions', 'dist', 'out'
+}
+
+# Расширения файлов, которые нужно пропустить
+EXCLUDE_EXTENSIONS = {
+    # Текстовые и документация
+    '.md', '.txt', '.rst', '.log',
+    # Файлы блокировок зависимостей
+    '.lock', 'package-lock.json', 'yarn.lock',
+    # Бинарные и медиа файлы
+    '.png', '.jpg', '.jpeg', '.gif', '.ico', '.pdf', '.mp4', '.mp3', '.svg',
+    # Базы данных и скомпилированный код
+    '.sqlite', '.sqlite3', '.db', '.pyc', '.pyo', '.pyd', '.class'
+}
+
+def generate_tree(dir_path, prefix=""):
+    """Генерирует строковое представление дерева директорий."""
+    tree_str = ""
+    try:
+        entries = sorted(os.listdir(dir_path))
+    except PermissionError:
+        return ""
+
+    # Фильтруем скрытые файлы и исключенные директории
+    entries = [e for e in entries if e not in EXCLUDE_DIRS and not e.startswith('.')]
+
+    for i, entry in enumerate(entries):
+        path = os.path.join(dir_path, entry)
+        is_last = i == (len(entries) - 1)
+        connector = "└── " if is_last else "├── "
+
+        if os.path.isdir(path):
+            tree_str += f"{prefix}{connector}{entry}/\n"
+            extension = "    " if is_last else "│   "
+            tree_str += generate_tree(path, prefix=prefix + extension)
+        else:
+            _, ext = os.path.splitext(entry)
+            if ext.lower() not in EXCLUDE_EXTENSIONS and entry not in EXCLUDE_EXTENSIONS:
+                tree_str += f"{prefix}{connector}{entry}\n"
+
+    return tree_str
+
+def scrape_project(target_dir, output_file):
+    """Собирает дерево и содержимое файлов проекта в один документ."""
+    target_path = Path(target_dir).resolve()
+
+    with open(output_file, 'w', encoding='utf-8') as outfile:
+        # 1. Записываем структуру проекта
+        outfile.write("=" * 60 + "\n")
+        outfile.write("PROJECT DIRECTORY TREE\n")
+        outfile.write("=" * 60 + "\n\n")
+        outfile.write(f"{target_path.name}/\n")
+        outfile.write(generate_tree(target_dir))
+        outfile.write("\n\n")
+
+        # 2. Собираем содержимое файлов
+        outfile.write("=" * 60 + "\n")
+        outfile.write("PROJECT FILES CONTENT\n")
+        outfile.write("=" * 60 + "\n\n")
+
+        for root, dirs, files in os.walk(target_dir):
+            # Модифицируем список dirs на месте, чтобы os.walk не заходил в исключенные директории
+            dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS and not d.startswith('.')]
+
+            for file in files:
+                # Пропускаем скрытые файлы
+                if file.startswith('.'):
+                    continue
+
+                _, ext = os.path.splitext(file)
+                # Проверяем как расширение, так и полное имя (например, для yarn.lock)
+                if ext.lower() in EXCLUDE_EXTENSIONS or file.lower() in EXCLUDE_EXTENSIONS:
+                    continue
+
+                # ИСПРАВЛЕНИЕ: приводим путь файла к абсолютному виду перед сравнением
+                file_path = (Path(root) / file).resolve()
+                relative_path = file_path.relative_to(target_path)
+                
+                # Пропускаем сам файл вывода, если он создается внутри проекта
+                if file_path.name == Path(output_file).name:
+                    continue
+
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as infile:
+                        content = infile.read()
+
+                    # Форматирование для ИИ: четкие границы начала и конца файла
+                    outfile.write(f"--- BEGIN FILE: {relative_path} ---\n")
+                    outfile.write(content)
+                    if not content.endswith('\n'):
+                        outfile.write("\n")
+                    outfile.write(f"--- END FILE: {relative_path} ---\n\n")
+
+                except UnicodeDecodeError:
+                    # Пропускаем файлы, которые не читаются как текст (например, бинарники без расширения)
+                    continue
+                except Exception as e:
+                    outfile.write(f"--- ERROR READING FILE: {relative_path} ({e}) ---\n\n")
+
+if __name__ == "__main__":
+    # Укажите путь к проекту. Точка "." означает текущую директорию.
+    PROJECT_DIRECTORY = "." 
+    
+    # Имя файла, в который будет сохранен результат
+    OUTPUT_FILENAME = "project_context_for_ai.txt"
+
+    print(f"Начинаю сбор данных из {os.path.abspath(PROJECT_DIRECTORY)}...")
+    scrape_project(PROJECT_DIRECTORY, OUTPUT_FILENAME)
+    print(f"Готово! Данные успешно сохранены в файл: {OUTPUT_FILENAME}")
+--- END FILE: scraper.py ---
+
