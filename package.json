@@ -1,0 +1,7 @@
+{
+  "name": "auto-close-tabs-browser",
+  "private": true,
+  "scripts": {
+    "test": "node --test"
+  }
+}

@@ -1,5 +1,6 @@
-const DEFAULT_TIMEOUT = 10;
-const RAM_PER_TAB_MB = 150;
+importScripts('logic.js');
+
+const { DEFAULT_TIMEOUT, RAM_PER_TAB_MB, isWhiteListedUrl, attachTimeToUrl, getTabProtectionReason } = TabLifecycleLogic;
 
 // Очередь для предотвращения Race Condition при последовательной записи в Storage
 let storageQueue = Promise.resolve();
@@ -25,15 +26,10 @@ async function resetTimer(tabId, customTimeout = null) {
 // Безопасная проверка домена (защита от Subdomain Spoofing)
 async function isWhiteListed(urlStr) {
   try {
-    if (!urlStr || !urlStr.startsWith('http')) return false;
-    const url = new URL(urlStr);
     const data = await chrome.storage.local.get("whiteList");
     const whiteList = data.whiteList || [];
-    
-    return whiteList.some(domain => {
-      // Строгое равенство хостов или проверка валидного родительского поддомена
-      return url.hostname === domain || url.hostname.endsWith('.' + domain);
-    });
+
+    return isWhiteListedUrl(urlStr, whiteList);
   } catch (e) {
     return false;
   }
@@ -97,21 +93,6 @@ async function getMediaCurrentTime(tabId) {
   }
 }
 
-// Функция модификации URL с таймкодом через нативный searchParams
-function attachTimeToUrl(urlStr, seconds) {
-  if (!seconds || seconds <= 0) return urlStr;
-  try {
-    const url = new URL(urlStr);
-    const timeValue = `${Math.floor(seconds)}s`; // Формат "123s"
-    
-    // Нативный searchParams сам поймет, использовать ли "?" или "&"
-    url.searchParams.set('t', timeValue);
-    return url.toString();
-  } catch (e) {
-    return urlStr;
-  }
-}
-
 // Санация хранилища при старте браузера (очистка невалидных ID сессии)
 chrome.runtime.onStartup.addListener(async () => {
   try {
@@ -172,46 +153,28 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     try {
       const lastFocusedWindow = await chrome.windows.getLastFocused();
       
-      // 1. Защита иммунитета
       const storageData = await chrome.storage.local.get("protectedTabIds");
       const protectedTabIds = storageData.protectedTabIds || [];
-      if (protectedTabIds.includes(tabId)) {
-        await resetTimer(tabId);
-        return;
-      }
 
-      // 2. Защита панели управления
       const extensionUrlBase = chrome.runtime.getURL('');
-      if (tab.url && tab.url.startsWith(extensionUrlBase)) {
-        const storageDataPage = await chrome.storage.local.get("protectDashboard");
-        if (storageDataPage.protectDashboard !== false) {
-          await resetTimer(tabId);
-          return;
-        }
-      }
-
-      // 3. Защита фокуса активности
-      if (tab.active && tab.windowId === lastFocusedWindow.id) {
-        await resetTimer(tabId);
-        return;
-      }
-
-      // 4. Защита встроенных флагов браузера
-      if (tab.pinned || tab.audible) {
-        await resetTimer(tabId);
-        return;
-      } 
-      
-      // 5. Проверка белого списка доменов
+      const storageDataPage = await chrome.storage.local.get("protectDashboard");
       const whitelisted = await isWhiteListed(tab.url);
-      if (whitelisted) {
-        await resetTimer(tabId);
-        return;
-      }
 
-      // 6. Анализ медиа-потоков
       const hasActiveMedia = await isMediaPlaying(tabId);
-      if (hasActiveMedia) {
+
+      const protectionReason = getTabProtectionReason({
+        isProtectedTab: protectedTabIds.includes(tabId),
+        isProtectedDashboard: Boolean(
+          tab.url && tab.url.startsWith(extensionUrlBase) && storageDataPage.protectDashboard !== false
+        ),
+        isActiveInFocusedWindow: Boolean(tab.active && tab.windowId === lastFocusedWindow.id),
+        isPinned: Boolean(tab.pinned),
+        isAudible: Boolean(tab.audible),
+        isWhiteListed: whitelisted,
+        hasActiveMedia: hasActiveMedia,
+      });
+
+      if (protectionReason) {
         await resetTimer(tabId);
         return;
       }

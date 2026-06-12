@@ -1,4 +1,6 @@
 document.addEventListener('DOMContentLoaded', async () => {
+  const { formatRam, sanitizeWhitelistInput, isValidTimeoutMinutes } = TabLifecycleLogic;
+
   // DOM Элементы
   const timeoutInput = document.getElementById('timeoutInput');
   const saveTimeoutBtn = document.getElementById('saveTimeoutBtn');
@@ -98,8 +100,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   function renderRam(mb) {
-    if (mb >= 1024) ramDisplay.textContent = `${(mb / 1024).toFixed(2)} ГБ`;
-    else ramDisplay.textContent = `${mb} МБ`;
+    ramDisplay.textContent = formatRam(mb);
   }
 
   // Защита от XSS: Безопасный рендер белого списка
@@ -254,16 +255,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   saveTimeoutBtn.addEventListener('click', async () => {
     const min = parseInt(timeoutInput.value, 10);
-    if (min >= 1) {
+    if (isValidTimeoutMinutes(min)) {
       await chrome.storage.local.set({ timeoutMinutes: min });
       alert('Интервал успешно обновлен для всех вкладок!');
     }
   });
 
   addWhitelistBtn.addEventListener('click', async () => {
-    let domain = whitelistInput.value.trim().toLowerCase();
+    let domain = sanitizeWhitelistInput(whitelistInput.value);
     if (!domain) return;
-    domain = domain.replace(/^(https?:\/\/)?(www\.)?/, '').split('/')[0];
     const data = await chrome.storage.local.get('whiteList');
     let whiteList = data.whiteList || [];
     if (!whiteList.includes(domain)) {
