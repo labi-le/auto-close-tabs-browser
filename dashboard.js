@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', async () => {
-  const { formatRam, sanitizeWhitelistInput, isValidTimeoutMinutes, resolveLocale } = TabLifecycleLogic;
+  const { formatRam, sanitizeWhitelistInput, isValidTimeoutMinutes, resolveLocale, normalizeTheme, resolveTheme, applyTheme, watchSystemTheme } = TabLifecycleLogic;
   const { applyI18n, t } = TabLifecycleI18n;
 
   // DOM Элементы
@@ -19,11 +19,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   const protectedTabsContainer = document.getElementById('protectedTabsContainer');
   const restoreAllBtn = document.getElementById('restoreAllBtn');
   const localeSelect = document.getElementById('localeSelect');
+  const themeSelect = document.getElementById('themeSelect');
 
   // Кэш состояния
   let globalTrashBin = [];
   let globalProtectedTabs = [];
   let currentLocale = resolveLocale(null, navigator.language);
+  let themeUnsubscribe = null;
 
   // Защита от XSS: Безопасное создание DOM-узлов вместо innerHTML
   function createDOMRow(mainText, subText, actionBtnConfig) {
@@ -81,10 +83,40 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
+  function syncThemePreference(themePreference) {
+    try {
+      localStorage.setItem('theme', themePreference);
+    } catch (e) {
+      console.warn('[Theme] Failed to persist theme locally:', e);
+    }
+  }
+
+  function initTheme(themePreference) {
+    themeSelect.value = themePreference;
+    syncThemePreference(themePreference);
+    applyResolvedTheme(themePreference);
+  }
+
+  function applyResolvedTheme(themePreference) {
+    if (themeUnsubscribe) {
+      themeUnsubscribe();
+      themeUnsubscribe = null;
+    }
+    const isSystemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const resolved = resolveTheme(themePreference, isSystemDark);
+    applyTheme(document, resolved);
+    if (themePreference === 'auto') {
+      themeUnsubscribe = watchSystemTheme((isDark) => {
+        applyTheme(document, resolveTheme('auto', isDark));
+      });
+    }
+  }
+
   async function init() {
-    const data = await chrome.storage.local.get(['timeoutMinutes', 'savedRamMb', 'whiteList', 'trashBin', 'protectDashboard', 'protectedTabIds', 'locale']);
+    const data = await chrome.storage.local.get(['timeoutMinutes', 'savedRamMb', 'whiteList', 'trashBin', 'protectDashboard', 'protectedTabIds', 'locale', 'theme']);
     currentLocale = resolveLocale(data.locale, navigator.language);
     localeSelect.value = data.locale || 'auto';
+    initTheme(normalizeTheme(data.theme));
     renderStaticTexts();
     
     timeoutInput.value = data.timeoutMinutes || 10;
@@ -99,6 +131,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const protectedIds = data.protectedTabIds || [];
     globalProtectedTabs = activeTabs.filter(tab => protectedIds.includes(tab.id));
     applyProtectedFilter();
+
   }
 
   protectDashboardCheckbox.addEventListener('change', async () => {
@@ -115,6 +148,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     localeSelect.options[0].textContent = t(currentLocale, 'languageAuto');
     localeSelect.options[1].textContent = t(currentLocale, 'languageRu');
     localeSelect.options[2].textContent = t(currentLocale, 'languageEn');
+
+    themeSelect.options[0].textContent = t(currentLocale, 'themeAuto');
+    themeSelect.options[1].textContent = t(currentLocale, 'themeLight');
+    themeSelect.options[2].textContent = t(currentLocale, 'themeDark');
   }
 
   // Защита от XSS: Безопасный рендер белого списка
@@ -284,6 +321,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderWhitelist((await chrome.storage.local.get('whiteList')).whiteList || []);
     applyTrashFilter();
     applyProtectedFilter();
+  });
+
+  themeSelect.addEventListener('change', async () => {
+    const themePreference = normalizeTheme(themeSelect.value);
+    await chrome.storage.local.set({ theme: themePreference });
+    syncThemePreference(themePreference);
+    applyResolvedTheme(themePreference);
   });
 
   addWhitelistBtn.addEventListener('click', async () => {

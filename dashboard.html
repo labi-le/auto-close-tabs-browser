@@ -3,16 +3,107 @@
 <head>
   <meta charset="UTF-8">
   <title>Tab Lifecycle Timer - Панель управления</title>
+  <script>
+    (function () {
+      try {
+        var themePreference = localStorage.getItem('theme');
+        var resolvedTheme = themePreference === 'dark'
+          || (themePreference !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          ? 'dark'
+          : 'light';
+        document.documentElement.setAttribute('data-theme', resolvedTheme);
+      } catch (e) {}
+    })();
+  </script>
   <style>
+    :root {
+      --bg-body: #f8f9fa;
+      --color-text: #3c4043;
+      --color-heading: #1a73e8;
+      --color-h2: #202124;
+      --color-h2-border: #f1f3f4;
+      --bg-card: #ffffff;
+      --shadow-card: 0 1px 3px rgba(0,0,0,0.1);
+      --border-input: #dadce0;
+      --color-toggle-label: #3c4043;
+      --border-toggle-wrapper: #e8eaed;
+      --bg-slider: #dadce0;
+      --bg-slider-checked: #1a73e8;
+      --bg-slider-knob: #ffffff;
+      --bg-button: #1a73e8;
+      --bg-button-hover: #1557b0;
+      --color-button-text: #ffffff;
+      --bg-button-secondary: #f1f3f4;
+      --color-button-secondary: #1a73e8;
+      --bg-button-secondary-hover: #e8eaed;
+      --bg-button-danger: #ea4335;
+      --bg-button-danger-hover: #c5221f;
+      --bg-banner: #fef7e0;
+      --border-banner: #f9d849;
+      --color-banner: #5f6368;
+      --bg-scrollbar-thumb: #dadce0;
+      --color-empty: #80868b;
+      --border-li: #f1f3f4;
+      --color-delete: #d93025;
+      --color-stat: #1a73e8;
+      --bg-tab-protect: #e8f0fe;
+      --color-tab-protect: #1967d2;
+      --color-placeholder: #5f6368;
+      --bg-master-switch: #f1f3f4;
+      --bg-master-switch-paused: #fce8e6;
+      --color-master-switch-paused: #c5221f;
+      --bg-stat-box: #f1f3f4;
+      --color-stat-box: #5f6368;
+    }
+    :root[data-theme="dark"] {
+      --bg-body: #121212;
+      --color-text: #e8eaed;
+      --color-heading: #8ab4f8;
+      --color-h2: #e8eaed;
+      --color-h2-border: #3c4043;
+      --bg-card: #1e1e1e;
+      --shadow-card: 0 1px 3px rgba(0,0,0,0.3);
+      --border-input: #5f6368;
+      --color-toggle-label: #e8eaed;
+      --border-toggle-wrapper: #3c4043;
+      --bg-slider: #5f6368;
+      --bg-slider-checked: #8ab4f8;
+      --bg-slider-knob: #e8eaed;
+      --bg-button: #8ab4f8;
+      --bg-button-hover: #aecbfa;
+      --color-button-text: #202124;
+      --bg-button-secondary: #3c4043;
+      --color-button-secondary: #8ab4f8;
+      --bg-button-secondary-hover: #5f6368;
+      --bg-button-danger: #ea4335;
+      --bg-button-danger-hover: #c5221f;
+      --bg-banner: #3c2f00;
+      --border-banner: #f9d849;
+      --color-banner: #e8eaed;
+      --bg-scrollbar-thumb: #5f6368;
+      --color-empty: #9aa0a6;
+      --border-li: #3c4043;
+      --color-delete: #f28b82;
+      --color-stat: #8ab4f8;
+      --bg-tab-protect: #174ea6;
+      --color-tab-protect: #8ab4f8;
+      --color-placeholder: #9aa0a6;
+      --bg-master-switch: #3c4043;
+      --bg-master-switch-paused: #5c1d1b;
+      --color-master-switch-paused: #f28b82;
+      --bg-stat-box: #3c4043;
+      --color-stat-box: #e8eaed;
+    }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-      background-color: #f8f9fa;
+      background-color: var(--bg-body);
       margin: 0;
       padding: 30px;
-      color: #3c4043;
+      color: var(--color-text);
+      transition: background-color 0.2s, color 0.2s;
     }
     .container { max-width: 900px; margin: 0 auto; }
-    h1 { font-size: 24px; color: #1a73e8; margin-bottom: 25px; }
+    h1 { font-size: 24px; color: var(--color-heading); margin-bottom: 25px; }
     .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-bottom: 20px; align-items: start; }
     @media (max-width: 768px) {
       .grid { grid-template-columns: 1fr; }
@@ -23,25 +114,39 @@
     .flex-header .search-input { flex: 1 1 auto; min-width: 0; width: auto; }
     .flex-header button { flex-shrink: 0; }
     .card {
-      background: white;
+      background: var(--bg-card);
       padding: 20px;
       border-radius: 8px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      box-shadow: var(--shadow-card);
       display: flex;
       flex-direction: column;
       min-height: 260px;
+      transition: background-color 0.2s;
     }
-    h2 { font-size: 16px; margin-top: 0; margin-bottom: 15px; color: #202124; border-bottom: 1px solid #f1f3f4; padding-bottom: 8px;}
+    h2 { font-size: 16px; margin-top: 0; margin-bottom: 15px; color: var(--color-h2); border-bottom: 1px solid var(--color-h2-border); padding-bottom: 8px; transition: color 0.2s; }
     .flex-input { display: flex; gap: 10px; margin-bottom: 15px; }
     input[type="number"], input[type="text"] {
       padding: 8px;
-      border: 1px solid #dadce0;
+      border: 1px solid var(--border-input);
       border-radius: 4px;
       font-size: 14px;
       flex-grow: 1;
+      background-color: var(--bg-card);
+      color: var(--color-text);
+      transition: background-color 0.2s, color 0.2s, border-color 0.2s;
     }
     input[type="number"] { max-width: 100px; }
-    
+    select {
+      padding: 8px;
+      border: 1px solid var(--border-input);
+      border-radius: 4px;
+      font-size: 14px;
+      flex-grow: 1;
+      background-color: var(--bg-card);
+      color: var(--color-text);
+      transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+    }
+
     /* Стили для ползунка (Toggle Switch) */
     .toggle-wrapper {
       display: flex;
@@ -49,9 +154,9 @@
       justify-content: space-between;
       margin-top: 20px;
       padding-top: 15px;
-      border-top: 1px dashed #e8eaed;
+      border-top: 1px dashed var(--border-toggle-wrapper);
     }
-    .toggle-label { font-size: 13px; color: #3c4043; font-weight: 500; }
+    .toggle-label { font-size: 13px; color: var(--color-toggle-label); font-weight: 500; }
     .switch {
       position: relative;
       display: inline-block;
@@ -61,41 +166,48 @@
     .switch input { opacity: 0; width: 0; height: 0; }
     .slider {
       position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
-      background-color: #dadce0; transition: .3s; border-radius: 22px;
+      background-color: var(--bg-slider); transition: .3s; border-radius: 22px;
     }
     .slider:before {
       position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px;
-      background-color: white; transition: .3s; border-radius: 50%;
+      background-color: var(--bg-slider-knob); transition: .3s; border-radius: 50%;
       box-shadow: 0 1px 3px rgba(0,0,0,0.2);
     }
-    input:checked + .slider { background-color: #1a73e8; }
+    input:checked + .slider { background-color: var(--bg-slider-checked); }
     input:checked + .slider:before { transform: translateX(18px); }
 
     .search-input {
-      width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #dadce0; border-radius: 4px; font-size: 13px;
-      background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="%2380868b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>');
+      width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid var(--border-input); border-radius: 4px; font-size: 13px;
+      background-color: var(--bg-card);
+      color: var(--color-text);
+      background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke=%2380868b stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>');
       background-repeat: no-repeat; background-position: calc(100% - 10px) center; padding-right: 35px;
+      transition: background-color 0.2s, color 0.2s, border-color 0.2s;
     }
-    button { padding: 8px 16px; background-color: #1a73e8; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; font-size: 13px; white-space: nowrap; }
-    button:hover { background-color: #1557b0; }
-    button.secondary { background-color: #f1f3f4; color: #1a73e8; }
-    button.secondary:hover { background-color: #e8eaed; }
-    button.danger { background-color: #ea4335; color: white; }
-    button.danger:hover { background-color: #c5221f; }
-    
+    :root[data-theme="dark"] .search-input {
+      background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke=%239aa0a6 stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>');
+    }
+    button { padding: 8px 16px; background-color: var(--bg-button); color: var(--color-button-text); border: none; border-radius: 4px; cursor: pointer; font-weight: 500; font-size: 13px; white-space: nowrap; transition: background-color 0.2s; }
+    button:hover { background-color: var(--bg-button-hover); }
+    button.secondary { background-color: var(--bg-button-secondary); color: var(--color-button-secondary); }
+    button.secondary:hover { background-color: var(--bg-button-secondary-hover); }
+    button.danger { background-color: var(--bg-button-danger); color: white; }
+    button.danger:hover { background-color: var(--bg-button-danger-hover); }
+
     /* Баннер запроса разрешений для Firefox */
     .permissions-banner {
       display: none;
       align-items: center;
       justify-content: space-between;
       padding: 12px 16px;
-      background-color: #fef7e0;
-      border: 1px solid #f9d849;
+      background-color: var(--bg-banner);
+      border: 1px solid var(--border-banner);
       border-radius: 8px;
       margin-bottom: 20px;
       font-size: 13px;
-      color: #5f6368;
+      color: var(--color-banner);
       gap: 12px;
+      transition: background-color 0.2s, color 0.2s;
     }
     .permissions-banner.visible { display: flex; }
     .permissions-banner button {
@@ -104,17 +216,17 @@
       padding: 6px 14px;
       font-size: 12px;
     }
-    
+
     ul { list-style: none; padding: 0; margin: 0; height: 200px; overflow-y: auto; scrollbar-width: thin; }
     ul::-webkit-scrollbar { width: 6px; }
-    ul::-webkit-scrollbar-thumb { background: #dadce0; border-radius: 3px; }
-    li.empty-state { justify-content: center; color: #80868b; height: 100%; border-bottom: none; box-sizing: border-box; }
-    li { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #f1f3f4; font-size: 14px; }
+    ul::-webkit-scrollbar-thumb { background: var(--bg-scrollbar-thumb); border-radius: 3px; }
+    li.empty-state { justify-content: center; color: var(--color-empty); height: 100%; border-bottom: none; box-sizing: border-box; }
+    li { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border-li); font-size: 14px; transition: border-color 0.2s; }
     li:last-child { border-bottom: none; }
-    .delete-btn { color: #d93025; cursor: pointer; background: none; border: none; padding: 0 5px; font-size: 16px; }
+    .delete-btn { color: var(--color-delete); cursor: pointer; background: none; border: none; padding: 0 5px; font-size: 16px; }
     .restore-btn { font-size: 12px; padding: 4px 8px; flex-shrink: 0; }
     .tab-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 75%; }
-    .stat-val { font-size: 28px; font-weight: bold; color: #1a73e8; margin-top: 10px; }
+    .stat-val { font-size: 28px; font-weight: bold; color: var(--color-stat); margin-top: 10px; transition: color 0.2s; }
   </style>
 </head>
 <body>
@@ -138,17 +250,25 @@
 
       <div class="card">
         <h2 data-i18n="globalSettings">Глобальные настройки</h2>
-        <p style="font-size: 13px; color: #5f6368;" data-i18n="globalSettingsHint">Вкладки закрываются, если провели в фоне указанное количество минут.</p>
+        <p style="font-size: 13px; color: var(--color-placeholder);" data-i18n="globalSettingsHint">Вкладки закрываются, если провели в фоне указанное количество минут.</p>
         <div class="flex-input">
           <input type="number" id="timeoutInput" min="1" max="1440">
           <button id="saveTimeoutBtn" data-i18n="save">Сохранить</button>
         </div>
         <div class="flex-input">
-          <label for="localeSelect" style="font-size: 13px; color: #5f6368; align-self: center;" data-i18n="languageLabel">Язык интерфейса</label>
-          <select id="localeSelect" style="padding: 8px; border: 1px solid #dadce0; border-radius: 4px; font-size: 14px; flex-grow: 1;">
+          <label for="localeSelect" style="font-size: 13px; color: var(--color-placeholder); align-self: center;" data-i18n="languageLabel">Язык интерфейса</label>
+          <select id="localeSelect" style="padding: 8px; border: 1px solid var(--border-input); border-radius: 4px; font-size: 14px; flex-grow: 1;">
             <option value="auto">Авто (по браузеру)</option>
             <option value="ru">Русский</option>
             <option value="en">English</option>
+          </select>
+        </div>
+        <div class="flex-input">
+          <label for="themeSelect" style="font-size: 13px; color: var(--color-placeholder); align-self: center;" data-i18n="themeLabel">Тема оформления</label>
+          <select id="themeSelect" style="padding: 8px; border: 1px solid var(--border-input); border-radius: 4px; font-size: 14px; flex-grow: 1;">
+            <option value="auto">Авто (по системе)</option>
+            <option value="light">Светлая</option>
+            <option value="dark">Тёмная</option>
           </select>
         </div>
         <div class="toggle-wrapper">
@@ -162,7 +282,7 @@
 
       <div class="card">
         <h2 data-i18n="savedMemoryTitle">Сбереженная память</h2>
-        <p style="font-size: 13px; color: #5f6368;" data-i18n="savedMemoryHint">Примерный объем оперативной памяти, освобожденный утилитой:</p>
+        <p style="font-size: 13px; color: var(--color-placeholder);" data-i18n="savedMemoryHint">Примерный объем оперативной памяти, освобожденный утилитой:</p>
         <div id="ramDisplay" class="stat-val">0 МБ</div>
       </div>
 

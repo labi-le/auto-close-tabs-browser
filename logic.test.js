@@ -7,6 +7,10 @@ const {
   SUPPORTED_LOCALES,
   normalizeLocale,
   resolveLocale,
+  normalizeTheme,
+  resolveTheme,
+  applyTheme,
+  watchSystemTheme,
   isWhiteListedUrl,
   attachTimeToUrl,
   formatRam,
@@ -30,6 +34,76 @@ test('normalizeLocale and resolveLocale support browser autodetect and manual ov
   assert.equal(resolveLocale('auto', 'en-GB'), 'en');
   assert.equal(resolveLocale(null, 'ru-RU'), 'ru');
   assert.equal(resolveLocale(undefined, 'de-DE'), 'ru');
+});
+
+test('normalizeTheme and resolveTheme support auto and manual theme selection', () => {
+  assert.equal(normalizeTheme('dark'), 'dark');
+  assert.equal(normalizeTheme('light'), 'light');
+  assert.equal(normalizeTheme('auto'), 'auto');
+  assert.equal(normalizeTheme('sepia'), 'auto');
+  assert.equal(normalizeTheme(undefined), 'auto');
+
+  assert.equal(resolveTheme('auto', true), 'dark');
+  assert.equal(resolveTheme('auto', false), 'light');
+  assert.equal(resolveTheme('dark', false), 'dark');
+  assert.equal(resolveTheme('light', true), 'light');
+});
+
+test('applyTheme sets data-theme on documentElement when possible', () => {
+  const attrs = {};
+  const fakeRoot = {
+    documentElement: {
+      setAttribute(name, value) {
+        attrs[name] = value;
+      }
+    }
+  };
+
+  applyTheme(fakeRoot, 'dark');
+  assert.equal(attrs['data-theme'], 'dark');
+
+  assert.doesNotThrow(() => applyTheme(null, 'light'));
+});
+
+test('watchSystemTheme subscribes and unsubscribes matchMedia listener', () => {
+  const originalWindow = global.window;
+  let registeredHandler = null;
+  let removedHandler = null;
+  const events = [];
+
+  global.window = {
+    matchMedia(query) {
+      assert.equal(query, '(prefers-color-scheme: dark)');
+      return {
+        addEventListener(eventName, handler) {
+          events.push(eventName);
+          registeredHandler = handler;
+        },
+        removeEventListener(eventName, handler) {
+          events.push(`removed:${eventName}`);
+          removedHandler = handler;
+        }
+      };
+    }
+  };
+
+  try {
+    let callbackValue = null;
+    const unsubscribe = watchSystemTheme((isDark) => {
+      callbackValue = isDark;
+    });
+
+    assert.equal(typeof unsubscribe, 'function');
+    assert.deepEqual(events, ['change']);
+    registeredHandler({ matches: true });
+    assert.equal(callbackValue, true);
+
+    unsubscribe();
+    assert.deepEqual(events, ['change', 'removed:change']);
+    assert.equal(removedHandler, registeredHandler);
+  } finally {
+    global.window = originalWindow;
+  }
 });
 
 test('isWhiteListedUrl matches exact host and valid subdomain', () => {

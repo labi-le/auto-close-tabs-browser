@@ -59,6 +59,33 @@
     return Number.isInteger(value) && value >= 1;
   }
 
+  function normalizeTheme(theme) {
+    const valid = ['auto', 'light', 'dark'];
+    if (valid.includes(theme)) return theme;
+    return 'auto';
+  }
+
+  function resolveTheme(themePreference, isSystemDark) {
+    const preference = normalizeTheme(themePreference);
+    if (preference === 'auto') {
+      return isSystemDark ? 'dark' : 'light';
+    }
+    return preference;
+  }
+
+  function applyTheme(root, resolvedTheme) {
+    if (root && root.documentElement) {
+      root.documentElement.setAttribute('data-theme', resolvedTheme);
+    }
+  }
+
+  function watchSystemTheme(callback) {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const handler = (e) => callback(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }
+
   function getTabProtectionReason(context) {
     if (context.isProtectedTab) return 'protected-tab';
     if (context.isProtectedDashboard) return 'protected-dashboard';
@@ -81,6 +108,10 @@
     formatRam,
     sanitizeWhitelistInput,
     isValidTimeoutMinutes,
+    normalizeTheme,
+    resolveTheme,
+    applyTheme,
+    watchSystemTheme,
     getTabProtectionReason,
   };
 

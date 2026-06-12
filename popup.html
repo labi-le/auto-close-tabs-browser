@@ -3,15 +3,67 @@
 <head>
   <meta charset="UTF-8">
   <title>Tab Lifecycle Timer</title>
+  <script>
+    (function () {
+      try {
+        var themePreference = localStorage.getItem('theme');
+        var resolvedTheme = themePreference === 'dark'
+          || (themePreference !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          ? 'dark'
+          : 'light';
+        document.documentElement.setAttribute('data-theme', resolvedTheme);
+      } catch (e) {}
+    })();
+  </script>
   <style>
+    :root {
+      --bg-body: #ffffff;
+      --color-text: #222222;
+      --color-h3: #222222;
+      --bg-master-switch: #f1f3f4;
+      --bg-master-switch-paused: #fce8e6;
+      --color-master-switch-paused: #c5221f;
+      --bg-stat-box: #f1f3f4;
+      --color-stat-box: #5f6368;
+      --color-stat-strong: #1a73e8;
+      --bg-tab-protect: #e8f0fe;
+      --color-tab-protect: #1967d2;
+      --bg-slider: #dadce0;
+      --bg-slider-checked: #1a73e8;
+      --bg-slider-knob: #ffffff;
+      --bg-button: #1a73e8;
+      --bg-button-hover: #1557b0;
+      --color-button-text: #ffffff;
+    }
+    :root[data-theme="dark"] {
+      --bg-body: #1e1e1e;
+      --color-text: #e8eaed;
+      --color-h3: #e8eaed;
+      --bg-master-switch: #3c4043;
+      --bg-master-switch-paused: #5c1d1b;
+      --color-master-switch-paused: #f28b82;
+      --bg-stat-box: #3c4043;
+      --color-stat-box: #e8eaed;
+      --color-stat-strong: #8ab4f8;
+      --bg-tab-protect: #174ea6;
+      --color-tab-protect: #8ab4f8;
+      --bg-slider: #5f6368;
+      --bg-slider-checked: #8ab4f8;
+      --bg-slider-knob: #e8eaed;
+      --bg-button: #8ab4f8;
+      --bg-button-hover: #aecbfa;
+      --color-button-text: #202124;
+    }
     body {
       width: 240px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
       padding: 14px;
       margin: 0;
-      background-color: #ffffff;
+      background-color: var(--bg-body);
+      color: var(--color-text);
+      transition: background-color 0.2s, color 0.2s;
     }
-    h3 { margin: 0 0 10px 0; font-size: 15px; color: #222; }
+    h3 { margin: 0 0 10px 0; font-size: 15px; color: var(--color-h3); transition: color 0.2s; }
     
     /* Главный выключатель таймера */
     .master-switch-box {
@@ -19,38 +71,41 @@
       align-items: center;
       justify-content: space-between;
       padding: 10px;
-      background-color: #f1f3f4;
+      background-color: var(--bg-master-switch);
       border-radius: 6px;
       font-size: 13px;
       margin-bottom: 12px;
       font-weight: bold;
+      transition: background-color 0.2s, color 0.2s;
     }
     .master-switch-box.paused {
-      background-color: #fce8e6;
-      color: #c5221f;
+      background-color: var(--bg-master-switch-paused);
+      color: var(--color-master-switch-paused);
     }
 
     .stat-box {
-      background-color: #f1f3f4;
+      background-color: var(--bg-stat-box);
       padding: 8px;
       border-radius: 6px;
       font-size: 12px;
-      color: #5f6368;
+      color: var(--color-stat-box);
       margin-bottom: 12px;
+      transition: background-color 0.2s, color 0.2s;
     }
-    .stat-box strong { color: #1a73e8; }
+    .stat-box strong { color: var(--color-stat-strong); transition: color 0.2s; }
     
     .tab-protect-box {
       display: flex;
       align-items: center;
       justify-content: space-between;
       padding: 8px;
-      background-color: #e8f0fe;
+      background-color: var(--bg-tab-protect);
       border-radius: 6px;
       font-size: 12px;
-      color: #1967d2;
+      color: var(--color-tab-protect);
       margin-bottom: 12px;
       font-weight: 500;
+      transition: background-color 0.2s, color 0.2s;
     }
     
     /* Общие стили Toggle Switches */
@@ -58,28 +113,30 @@
     .switch input { opacity: 0; width: 0; height: 0; }
     .slider {
       position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
-      background-color: #dadce0; transition: .2s; border-radius: 20px;
+      background-color: var(--bg-slider); transition: .2s; border-radius: 20px;
     }
     .slider:before {
       position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px;
-      background-color: white; transition: .2s; border-radius: 50%;
+      background-color: var(--bg-slider-knob); transition: .2s; border-radius: 50%;
     }
-    input:checked + .slider { background-color: #1a73e8; }
+    input:checked + .slider { background-color: var(--bg-slider-checked); }
     input:checked + .slider.master-slider { background-color: #1e8e3e; }
+    :root[data-theme="dark"] input:checked + .slider.master-slider { background-color: #81c995; }
     input:checked + .slider:before { transform: translateX(14px); }
 
     button {
       width: 100%;
       padding: 8px;
-      background-color: #1a73e8;
-      color: white;
+      background-color: var(--bg-button);
+      color: var(--color-button-text);
       border: none;
       border-radius: 4px;
       cursor: pointer;
       font-weight: 500;
       font-size: 13px;
+      transition: background-color 0.2s, color 0.2s;
     }
-    button:hover { background-color: #1557b0; }
+    button:hover { background-color: var(--bg-button-hover); }
   </style>
 </head>
 <body>

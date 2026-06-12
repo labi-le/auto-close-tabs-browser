@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', async () => {
-  const { resolveLocale, formatRam } = TabLifecycleLogic;
+  const { resolveLocale, formatRam, resolveTheme, applyTheme, normalizeTheme } = TabLifecycleLogic;
   const { applyI18n, t } = TabLifecycleI18n;
   const currentTimeout = document.getElementById('currentTimeout');
   const ramCounter = document.getElementById('ramCounter');
@@ -12,14 +12,29 @@ document.addEventListener('DOMContentLoaded', async () => {
   let currentTabId = null;
   let currentLocale = resolveLocale(null, navigator.language);
 
+  function syncThemePreference(themePreference) {
+    try {
+      localStorage.setItem('theme', themePreference);
+    } catch (e) {
+      console.warn('[Theme] Failed to persist theme locally:', e);
+    }
+  }
+
   try {
     const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (activeTab && activeTab.id) currentTabId = activeTab.id;
 
     // Считываем состояние таймера (true по умолчанию)
-    const data = await chrome.storage.local.get(['timeoutMinutes', 'savedRamMb', 'protectedTabIds', 'timerEnabled', 'locale']);
+    const data = await chrome.storage.local.get(['timeoutMinutes', 'savedRamMb', 'protectedTabIds', 'timerEnabled', 'locale', 'theme']);
     currentLocale = resolveLocale(data.locale, navigator.language);
     applyI18n(document, currentLocale);
+    
+    // Тема
+    const themePreference = normalizeTheme(data.theme);
+    syncThemePreference(themePreference);
+    const isSystemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const resolvedTheme = resolveTheme(themePreference, isSystemDark);
+    applyTheme(document, resolvedTheme);
     
     currentTimeout.textContent = data.timeoutMinutes || 10;
     ramCounter.textContent = formatRam(data.savedRamMb || 0, currentLocale);
