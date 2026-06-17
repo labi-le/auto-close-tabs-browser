@@ -48,4 +48,4 @@ If this policy changes, the updated version will be published with a new effecti
 
 ## Contact
 
-If you have questions about this Privacy Policy, contact: **[Your Contact Email]**
+If you have questions about this Privacy Policy, contact: **1a6i1e@gmail.com**
